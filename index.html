@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Armoured Clash Unit Cards</title>
+<meta name="description" content="Pick your units and look up Armoured Clash unit cards and rules fast.">
+<meta name="theme-color" content="#2f3a2b">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-row">
+    <h1>Armoured Clash <span>unit cards</span></h1>
+    <div class="faction-switch" role="group" aria-label="Faction">
+      <button data-faction="Crown" aria-pressed="false">Crown</button>
+      <button data-faction="Empire" aria-pressed="false">Empire</button>
+      <button data-faction="All" aria-pressed="true">Both</button>
+    </div>
+  </div>
+  <div class="search-row">
+    <label class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+      <input id="q" type="search" placeholder="Search units, traits, rules, weapon qualities" autocomplete="off" enterkeyhint="search">
+      <kbd>/</kbd>
+    </label>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="units" aria-selected="true">All units</button>
+    <button role="tab" data-tab="force" aria-selected="false">My force <b id="forceCount">0</b></button>
+    <button role="tab" data-tab="rules" aria-selected="false">Rules</button>
+  </nav>
+  <div class="filters" id="filters"></div>
+</header>
+
+<main class="layout">
+  <section class="list-pane" id="listPane" aria-live="polite"></section>
+  <aside class="detail-pane" id="detail" aria-label="Unit card" hidden></aside>
+</main>
+
+<div class="pop" id="pop" role="dialog" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
