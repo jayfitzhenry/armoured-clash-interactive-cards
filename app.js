@@ -45,6 +45,8 @@ const ptsRange = u => {
   return lo === hi ? `${lo}` : `${lo}–${hi}`;
 };
 const minPts = u => Math.min(...u.variants.flatMap(v => v.points).filter(n => n != null));
+const basicIdx = u => Math.max(0, u.strengths.indexOf('Basic'));
+const narrow = () => matchMedia('(max-width:959px)').matches;
 const toast = msg => { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 1800); };
 
 function buildIndex(u) {
@@ -101,7 +103,7 @@ const entryVpr = e => {
 function saveForce() { store.set('force', S.force); $('#forceCount').textContent = S.force.length; }
 function addToForce(id) {
   const u = S.byId[id];
-  S.force.push({k: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), u: id, s: u.strengths.length - 1, v: 0});
+  S.force.push({k: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), u: id, s: basicIdx(u), v: 0});
   saveForce(); toast(`${u.name} added to your force`); render();
 }
 function removeOne(id) {
@@ -140,7 +142,13 @@ function renderHeader() {
     f.innerHTML = CATS.filter(c => present.has(c)).map(c => `<button class="chip" data-cat="${esc(c)}" aria-pressed="${S.cats.has(c)}">${c}</button>`).join('')
       + (S.cats.size || S.q ? `<span class="sep"></span><button class="chip clear" data-clear>Clear filters</button>` : '');
   }
-  document.documentElement.style.setProperty('--hdr', $('.top').offsetHeight + 12 + 'px');
+  measureHeader();
+}
+function measureHeader() {
+  const root = document.documentElement.style;
+  root.setProperty('--hdr', $('.top').offsetHeight + 12 + 'px');
+  // On phones the title row scrolls away; search, tabs and filters stay pinned.
+  root.setProperty('--hdr-tuck', -($('.search-row').offsetTop - 8) + 'px');
 }
 
 /* ---------- rendering: lists ---------- */
@@ -245,11 +253,13 @@ function cardHTML(u) {
   const n = forceCount(u.id);
   const qTag = q => `<button class="tag" data-q="${esc(q)}">${hl(q)}</button>`;
   const pos = S.visible.indexOf(u.id);
+  const selS = entry ? entry.s : basicIdx(u);
   const cvRules = new Set(u.commandVariantRules.map(baseName));
   return `
-  <button class="sheet-close" data-close><span aria-hidden="true">‹</span> Back to list
-    <span class="sheet-nav">${pos > 0 ? `<span data-step="-1" role="button" aria-label="Previous unit">Prev</span>` : ''}${pos > -1 && pos < S.visible.length - 1 ? `<span data-step="1" role="button" aria-label="Next unit">Next</span>` : ''}</span>
-  </button>
+  <div class="sheet-bar">
+    <button class="sheet-close" data-close aria-label="Close unit card"><span aria-hidden="true">✕</span> Close</button>
+    <span class="sheet-nav">${pos > 0 ? `<button data-step="-1" aria-label="Previous unit">‹ Prev</button>` : ''}${pos > -1 && pos < S.visible.length - 1 ? `<button data-step="1" aria-label="Next unit">Next ›</button>` : ''}</span>
+  </div>
   <article class="card" data-f="${u.faction}">
     <div class="card-head">
       <div class="card-kicker"><span class="fac">The ${u.faction}</span>, ${esc(u.categories.join(' / '))}</div>
@@ -274,7 +284,7 @@ function cardHTML(u) {
     <div class="sec">
       <h3>Strength and points</h3>
       <table class="strength"><thead><tr><th></th><th>Models</th><th>VPR</th>${u.variants.map(v => `<th>${esc(u.variants.length > 1 ? v.name : 'Points')}</th>`).join('')}</tr></thead>
-      <tbody>${u.strengths.map((s, i) => `<tr class="${entry && entry.s === i ? 'sel' : ''}"><td>${s}</td><td>${esc(u.models[i])}</td><td>${esc(u.vpr[i])}</td>${u.variants.map(v => `<td>${v.points[i] ?? '-'}</td>`).join('')}</tr>`).join('')}</tbody></table>
+      <tbody>${u.strengths.map((s, i) => `<tr class="${selS === i ? 'sel' : ''}"><td>${s}</td><td>${esc(u.models[i])}</td><td>${esc(u.vpr[i])}</td>${u.variants.map(v => `<td>${v.points[i] ?? '-'}</td>`).join('')}</tr>`).join('')}</tbody></table>
     </div>
 
     <div class="sec">
@@ -298,15 +308,9 @@ function cardHTML(u) {
 function renderDetail() {
   const d = $('#detail');
   const u = S.sel && S.byId[S.sel];
-  if (!u) {
-    d.dataset.empty = ''; d.hidden = false;
-    d.innerHTML = 'Pick a unit to see its card.';
-    document.body.classList.remove('sheet-open');
-    return;
-  }
-  delete d.dataset.empty; d.hidden = false;
-  d.innerHTML = cardHTML(u);
-  if (matchMedia('(max-width:959px)').matches) document.body.classList.add('sheet-open');
+  document.body.classList.toggle('has-card', !!u);
+  d.hidden = !u;
+  d.innerHTML = u ? cardHTML(u) : '';
 }
 
 function render() {
@@ -331,13 +335,19 @@ const closePop = () => { $('#pop').hidden = true; };
 
 /* ---------- events ---------- */
 function openUnit(id, entryKey = null) {
+  // On phones the card is a full-screen sheet, so let the back button/gesture close it.
+  if (!S.sel && narrow()) history.pushState({sheet: 1}, '');
   S.sel = id; S.selEntry = entryKey;
   if (S.tab === 'rules') S.tab = 'units';
   render();
   const d = $('#detail'); d.scrollTop = 0;
-  if (!matchMedia('(max-width:959px)').matches) $(`.row[data-id="${id}"]`)?.scrollIntoView({block: 'nearest'});
+  if (!narrow()) $(`.row[data-id="${id}"]`)?.scrollIntoView({block: 'nearest'});
 }
-function closeSheet() { S.sel = null; S.selEntry = null; render(); }
+function closeSheet() {
+  if (history.state?.sheet) return history.back();   // popstate does the closing
+  S.sel = null; S.selEntry = null; render();
+}
+window.addEventListener('popstate', () => { if (S.sel) { S.sel = null; S.selEntry = null; render(); } });
 
 document.addEventListener('click', e => {
   const t = e.target.closest('button, [data-open], [data-step], .row, a');
@@ -358,7 +368,7 @@ document.addEventListener('click', e => {
   if ('share' in ds) { shareForce(); return; }
   if ('clearforce' in ds) { if (confirm('Remove every unit from your force?')) { S.force = []; saveForce(); render(); } return; }
   if (ds.q) { showGloss(ds.q); return; }
-  if (ds.trait) { S.q = ds.trait; $('#q').value = ds.trait; S.tab = S.tab === 'force' ? 'force' : 'units'; S.sel = null; render(); toast(`Showing units with ${ds.trait}`); return; }
+  if (ds.trait) { S.q = ds.trait; $('#q').value = ds.trait; S.tab = S.tab === 'force' ? 'force' : 'units'; S.sel = null; if (history.state?.sheet) history.back(); render(); toast(`Showing units with ${ds.trait}`); return; }
   if (ds.step) { e.stopPropagation(); const i = S.visible.indexOf(S.sel) + (+ds.step); if (S.visible[i]) openUnit(S.visible[i]); return; }
   if ('close' in ds) { closeSheet(); return; }
   if ('closepop' in ds) { closePop(); return; }
@@ -385,7 +395,7 @@ $('#q').addEventListener('input', e => {
   qt = setTimeout(() => { S.q = e.target.value.trim(); render(); }, 90);
 });
 window.addEventListener('hashchange', () => { importFromHash(); render(); });
-window.addEventListener('resize', () => document.documentElement.style.setProperty('--hdr', $('.top').offsetHeight + 12 + 'px'));
+window.addEventListener('resize', measureHeader);
 
 /* ---------- boot ---------- */
 Promise.all([fetch('data/units.json').then(r => r.json()), fetch('data/glossary.json').then(r => r.json())])
