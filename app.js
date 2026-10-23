@@ -22,6 +22,7 @@ const S = {
   sel: null,           // open unit id
   selEntry: null,      // force entry key the card was opened from
   force: store.get('force', []),
+  score: store.get('score', null),   // {f: [mine, opp], vp: [[mine, opp], ...per round], r: current round index}
   visible: []          // ids in current list order (for prev/next)
 };
 
@@ -128,6 +129,16 @@ function importFromHash() {
   }
 }
 
+/* ---------- score ---------- */
+const allFactions = () => [...new Set(S.units.map(u => u.faction))].sort();
+function newScore() {
+  const fs = allFactions();
+  const forceF = S.byId[S.force[0]?.u]?.faction;
+  const mine = S.faction !== 'All' ? S.faction : forceF || fs[0];
+  return {f: [mine, S.score?.f[1] ?? fs.find(f => f !== mine)], vp: [[0, 0]], r: 0};
+}
+function saveScore() { store.set('score', S.score); }
+
 /* ---------- rendering: header bits ---------- */
 function renderFactions() {
   const fs = [...new Set(S.units.map(u => u.faction))].sort();
@@ -143,6 +154,8 @@ function renderHeader() {
   if (S.tab === 'rules') {
     const kinds = [['all','Everything'],['Special Rule','Special rules'],['Weapon Quality','Weapon qualities'],['force','Used by my force']];
     f.innerHTML = kinds.map(([k, l]) => `<button class="chip" data-gkind="${k}" aria-pressed="${S.gkind === k}">${l}</button>`).join('');
+  } else if (S.tab === 'score') {
+    f.innerHTML = '';
   } else {
     const present = new Set(S.units.filter(u => S.faction === 'All' || u.faction === S.faction).flatMap(u => u.categories));
     f.innerHTML = CATS.filter(c => present.has(c)).map(c => `<button class="chip" data-cat="${esc(c)}" aria-pressed="${S.cats.has(c)}">${c}</button>`).join('')
@@ -253,6 +266,37 @@ function renderRules() {
     }).join('');
 }
 
+function renderScore() {
+  if (!S.score) { S.score = newScore(); saveScore(); }
+  const sc = S.score, fs = allFactions();
+  const tot = i => sc.vp.reduce((a, r) => a + r[i], 0);
+  const last = sc.r === sc.vp.length - 1;
+  const side = i => `<div class="vp-side" data-f="${esc(sc.f[i])}">
+      <label class="vp-who"><small>${i ? 'Opponent' : 'You'}</small>
+        <select data-side="${i}" aria-label="${i ? 'Opponent' : 'Your'} faction">${fs.map(f => `<option ${f === sc.f[i] ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select></label>
+      <div class="vp-ctrl">
+        <button class="vp-btn" data-vp="${i}:-1" aria-label="Remove a victory point" ${sc.vp[sc.r][i] ? '' : 'disabled'}>−</button>
+        <span class="vp-n" aria-live="polite">${sc.vp[sc.r][i]}</span>
+        <button class="vp-btn" data-vp="${i}:1" aria-label="Add a victory point">+</button>
+      </div>
+      <div class="vp-tot"><b>${tot(i)}</b> total VP</div>
+    </div>`;
+  $('#listPane').innerHTML = `<div class="score">
+    <div class="round-bar">
+      <button class="btn" data-round="-1" ${sc.r ? '' : 'disabled'} aria-label="Previous round">‹</button>
+      <span>Round <b>${sc.r + 1}</b></span>
+      <button class="btn ${last ? 'primary' : ''}" data-round="1">${last ? 'Next round +' : '›'}</button>
+    </div>
+    <div class="vp-sides">${side(0)}${side(1)}</div>
+    <table class="vp-table">
+      <thead><tr><th>Round</th><th data-f="${esc(sc.f[0])}">${esc(sc.f[0])}</th><th data-f="${esc(sc.f[1])}">${esc(sc.f[1])}</th></tr></thead>
+      <tbody>${sc.vp.map((r, i) => `<tr data-goround="${i}" class="${i === sc.r ? 'sel' : ''}"><td>${i + 1}</td><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td>Total</td><td>${tot(0)}</td><td>${tot(1)}</td></tr></tfoot>
+    </table>
+    <div class="score-actions"><button class="btn" data-resetscore>Reset scores</button></div>
+  </div>`;
+}
+
 /* ---------- rendering: card ---------- */
 function cardHTML(u) {
   const entry = S.force.find(e => e.k === S.selEntry && e.u === u.id);
@@ -321,9 +365,9 @@ function renderDetail() {
 }
 
 function render() {
-  document.body.classList.toggle('wide', S.tab === 'rules');
+  document.body.classList.toggle('wide', S.tab === 'rules' || S.tab === 'score');
   renderHeader();
-  ({units: renderUnits, force: renderForce, rules: renderRules})[S.tab]();
+  ({units: renderUnits, force: renderForce, rules: renderRules, score: renderScore})[S.tab]();
   renderDetail();
 }
 
@@ -345,7 +389,7 @@ function openUnit(id, entryKey = null) {
   // On phones the card is a full-screen sheet, so let the back button/gesture close it.
   if (!S.sel && narrow()) history.pushState({sheet: 1}, '');
   S.sel = id; S.selEntry = entryKey;
-  if (S.tab === 'rules') S.tab = 'units';
+  if (S.tab === 'rules' || S.tab === 'score') S.tab = 'units';
   render();
   const d = $('#detail'); d.scrollTop = 0;
   if (!narrow()) $(`.row[data-id="${id}"]`)?.scrollIntoView({block: 'nearest'});
@@ -357,7 +401,7 @@ function closeSheet() {
 window.addEventListener('popstate', () => { if (S.sel) { S.sel = null; S.selEntry = null; render(); } });
 
 document.addEventListener('click', e => {
-  const t = e.target.closest('button, [data-open], [data-step], .row, a');
+  const t = e.target.closest('button, [data-open], [data-step], [data-goround], .row, a');
   if (!t) { if (!e.target.closest('#pop')) closePop(); return; }
   const ds = t.dataset;
   if (!t.closest('#pop') && !('q' in ds)) closePop();
@@ -373,6 +417,15 @@ document.addEventListener('click', e => {
   if (ds.str) { const [k, i] = ds.str.split(':'); const en = S.force.find(x => x.k === k); en.s = +i; saveForce(); render(); return; }
   if (ds.var) { const [k, i] = ds.var.split(':'); const en = S.force.find(x => x.k === k); en.v = +i; saveForce(); render(); return; }
   if ('share' in ds) { shareForce(); return; }
+  if (ds.vp) { const [i, d] = ds.vp.split(':').map(Number); const r = S.score.vp[S.score.r]; r[i] = Math.max(0, r[i] + d); saveScore(); render(); return; }
+  if (ds.round) {
+    const sc = S.score, r = sc.r + (+ds.round);
+    if (r < 0) return;
+    if (r === sc.vp.length) sc.vp.push([0, 0]);
+    sc.r = r; saveScore(); render(); return;
+  }
+  if (ds.goround) { S.score.r = +ds.goround; saveScore(); render(); return; }
+  if ('resetscore' in ds) { if (confirm('Reset all victory points and start again from round 1?')) { S.score = {...newScore(), f: S.score.f}; saveScore(); render(); } return; }
   if ('clearforce' in ds) { if (confirm('Remove every unit from your force?')) { S.force = []; saveForce(); render(); } return; }
   if (ds.q) { showGloss(ds.q); return; }
   if (ds.trait) { S.q = ds.trait; $('#q').value = ds.trait; S.tab = S.tab === 'force' ? 'force' : 'units'; S.sel = null; if (history.state?.sheet) history.back(); render(); toast(`Showing units with ${ds.trait}`); return; }
@@ -395,11 +448,14 @@ document.addEventListener('keydown', e => {
     if (S.visible[i]) openUnit(S.visible[i]);
   }
 });
-document.addEventListener('change', e => { if (e.target.id === 'sort') { S.sort = e.target.value; store.set('sort', S.sort); render(); } });
+document.addEventListener('change', e => {
+  if (e.target.id === 'sort') { S.sort = e.target.value; store.set('sort', S.sort); render(); }
+  if (e.target.dataset.side) { S.score.f[+e.target.dataset.side] = e.target.value; saveScore(); render(); }
+});
 let qt;
 $('#q').addEventListener('input', e => {
   clearTimeout(qt);
-  qt = setTimeout(() => { S.q = e.target.value.trim(); render(); }, 90);
+  qt = setTimeout(() => { S.q = e.target.value.trim(); if (S.tab === 'score') S.tab = 'units'; render(); }, 90);
 });
 window.addEventListener('hashchange', () => { importFromHash(); render(); });
 window.addEventListener('resize', measureHeader);

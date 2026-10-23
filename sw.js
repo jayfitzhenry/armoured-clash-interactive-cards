@@ -1,5 +1,5 @@
 // Offline cache: app shell + data + images. Bump VERSION after updating data.
-const VERSION = 'acc-v3';
+const VERSION = 'acc-v4';
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(['./', 'index.html', 'styles.css', 'app.js', 'data/units.json', 'data/glossary.json', 'icon.svg', 'manifest.webmanifest'])));
   self.skipWaiting();
