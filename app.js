@@ -48,7 +48,24 @@ const ptsRange = u => {
 const minPts = u => Math.min(...u.variants.flatMap(v => v.points).filter(n => n != null));
 const basicIdx = u => Math.max(0, u.strengths.indexOf('Basic'));
 const narrow = () => matchMedia('(max-width:959px)').matches;
-const toast = msg => { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 1800); };
+// Back to the top of the list, but no further than where the phone header tucks away.
+const toTop = () => {
+  const tuck = narrow() ? -parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hdr-tuck')) || 0 : 0;
+  if (scrollY > tuck) scrollTo(0, tuck);
+};
+// Pass an undo function to give the toast an Undo button (and a longer life).
+const toast = (msg, undo) => {
+  const t = $('#toast');
+  t.innerHTML = esc(msg) + (undo ? ' <button data-undo>Undo</button>' : '');
+  toast.undo = undo; t.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; toast.undo = null; }, undo ? 5000 : 1800);
+};
+// Snapshot force and score, run a destructive change, then offer to put things back.
+function undoable(msg, fn) {
+  const before = JSON.stringify({force: S.force, score: S.score});
+  fn(); render();
+  toast(msg, () => { const b = JSON.parse(before); S.force = b.force; S.score = b.score; saveForce(); saveScore(); render(); });
+}
 
 function buildIndex(u) {
   const ruleText = u.rules.map(r => r.name + ' ' + r.blocks.map(b => b.type === 'p' ? b.text : b.rows.flat().join(' ')).join(' ')).join(' ');
@@ -109,7 +126,7 @@ function addToForce(id) {
 }
 function removeOne(id) {
   const i = S.force.map(e => e.u).lastIndexOf(id);
-  if (i > -1) { S.force.splice(i, 1); saveForce(); render(); }
+  if (i > -1) undoable(`${S.byId[id].name} removed`, () => { S.force.splice(i, 1); saveForce(); });
 }
 function shareForce() {
   const code = S.force.map(e => `${e.u}~${e.s}~${e.v}`).join(',');
@@ -137,7 +154,26 @@ function newScore() {
   const mine = S.faction !== 'All' ? S.faction : forceF || fs[0];
   return {f: [mine, S.score?.f[1] ?? fs.find(f => f !== mine)], vp: [[0, 0]], r: 0};
 }
+// Stored scores can come from older builds or a hand-edited localStorage: rebuild anything malformed.
+function checkScore() {
+  const sc = S.score, fs = allFactions();
+  const ok = sc && Array.isArray(sc.f) && sc.f.length === 2 && Array.isArray(sc.vp) && sc.vp.length
+    && sc.vp.every(r => Array.isArray(r) && r.length === 2 && r.every(n => Number.isInteger(n) && n >= 0));
+  if (!ok) { S.score = null; S.score = newScore(); return saveScore(); }
+  sc.f = sc.f.map((f, i) => fs.includes(f) ? f : fs[i] ?? fs[0]);
+  sc.r = Math.min(Math.max(0, sc.r | 0), sc.vp.length - 1);
+}
 function saveScore() { store.set('score', S.score); }
+const scoreTot = i => S.score.vp.reduce((a, r) => a + r[i], 0);
+function goRound(r) {
+  const sc = S.score;
+  if (r < 0) return;
+  if (r === sc.vp.length) sc.vp.push([0, 0]);
+  sc.r = Math.min(r, sc.vp.length - 1);
+  // Drop untouched rounds after the one being viewed, so a stray "next round" tap can be undone by going back.
+  while (sc.vp.length - 1 > sc.r && !sc.vp.at(-1)[0] && !sc.vp.at(-1)[1]) sc.vp.pop();
+  saveScore(); render();
+}
 
 /* ---------- rendering: header bits ---------- */
 function renderFactions() {
@@ -162,6 +198,15 @@ function renderHeader() {
       + (S.cats.size || S.q ? `<span class="sep"></span><button class="chip clear" data-clear>Clear filters</button>` : '');
   }
   measureHeader();
+  document.querySelector('.faction-switch [aria-pressed=true]')?.scrollIntoView({block: 'nearest', inline: 'nearest'});
+  fades();
+}
+// Fade the edge of a sideways-scrolling chip row while there is more to see in that direction.
+function fades() {
+  document.querySelectorAll('.faction-switch, .filters').forEach(el => {
+    el.classList.toggle('more-r', el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+    el.classList.toggle('more-l', el.scrollLeft > 2);
+  });
 }
 function measureHeader() {
   const root = document.documentElement.style;
@@ -224,6 +269,7 @@ function renderForce() {
       const u = S.byId[e.u];
       return `<li class="entry" data-f="${u.faction}" data-key="${e.k}">
         <div class="entry-top">
+          ${u.img ? `<img src="${u.img}" alt="" loading="lazy" width="44" height="34" data-open="${u.id}" data-entry="${e.k}">` : ''}
           <p class="row-name" data-open="${u.id}" data-entry="${e.k}" tabindex="0">${hl(u.variants[e.v]?.name || u.name)}</p>
           <span class="pts">${entryPts(e)}</span>
           <button class="icon-btn" data-remove="${e.k}" aria-label="Remove ${esc(u.name)}" title="Remove">×</button>
@@ -255,45 +301,55 @@ function renderRules() {
     pane.innerHTML = `<div class="empty">${S.gkind === 'force' && !S.force.length ? 'Add units to your force to see the rules they use.' : `No rules match${S.q ? ` “${esc(S.q)}”` : ''}.`}</div>`;
     return;
   }
-  pane.innerHTML = `<div class="meta-line"><span>${list.length} entr${list.length > 1 ? 'ies' : 'y'}, from the Glossary of Rules &amp; Qualities v1.11</span></div>` +
+  // A long list reads best as a scannable index of names; searching or a short list opens everything.
+  const open = ts.length || list.length <= 8 || S.glossOpen;
+  pane.innerHTML = `<div class="meta-line"><span>${list.length} entr${list.length > 1 ? 'ies' : 'y'}, from the Glossary of Rules &amp; Qualities v1.11</span>
+    ${list.length > 8 && !ts.length ? `<button class="linkish" data-glossall>${S.glossOpen ? 'Collapse all' : 'Expand all'}</button>` : ''}</div>` +
     list.map(g => {
       const b = baseName(g.name);
       const users = pool.filter(u => g.type === 'Weapon Quality' ? u._quals.some(q => baseName(q) === b) : [...u.specialRules, ...u.commandVariantRules].some(r => baseName(r) === b));
-      return `<article class="gloss"><h3>${hl(g.name)}<small>${g.type === 'Weapon Quality' ? 'Weapon quality' : 'Special rule'}</small></h3>
+      return `<details class="gloss" ${open ? 'open' : ''}><summary><h3>${hl(g.name)}<small>${g.type === 'Weapon Quality' ? 'Weapon quality' : 'Special rule'}</small></h3></summary>
         ${g.paras.map(p => `<p>${hl(p)}</p>`).join('')}
         ${users.length ? `<div class="users">Used by: ${users.map(u => `<button data-open="${u.id}">${esc(u.name)}</button>`).join(', ')}</div>` : ''}
-      </article>`;
+      </details>`;
     }).join('');
 }
 
 function renderScore() {
-  if (!S.score) { S.score = newScore(); saveScore(); }
-  const sc = S.score, fs = allFactions();
-  const tot = i => sc.vp.reduce((a, r) => a + r[i], 0);
+  checkScore();
+  const sc = S.score, fs = allFactions(), cur = sc.vp[sc.r];
+  const tot = [scoreTot(0), scoreTot(1)], gap = Math.abs(tot[0] - tot[1]);
+  const lead = tot[0] === tot[1] ? -1 : +(tot[1] > tot[0]);
+  const who = i => i ? 'Opponent' : 'You';
+  const name = i => sc.f[0] === sc.f[1] ? who(i) : sc.f[i];
   const last = sc.r === sc.vp.length - 1;
-  const side = i => `<div class="vp-side" data-f="${esc(sc.f[i])}">
-      <label class="vp-who"><small>${i ? 'Opponent' : 'You'}</small>
-        <select data-side="${i}" aria-label="${i ? 'Opponent' : 'Your'} faction">${fs.map(f => `<option ${f === sc.f[i] ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select></label>
-      <div class="vp-ctrl">
-        <button class="vp-btn" data-vp="${i}:-1" aria-label="Remove a victory point" ${sc.vp[sc.r][i] ? '' : 'disabled'}>−</button>
-        <span class="vp-n" aria-live="polite">${sc.vp[sc.r][i]}</span>
-        <button class="vp-btn" data-vp="${i}:1" aria-label="Add a victory point">+</button>
+  const side = i => `<section class="vp-side ${lead === i ? 'ahead' : ''}" data-f="${esc(sc.f[i])}" aria-label="${who(i)}">
+      <label class="vp-who"><small>${who(i)}</small>
+        <select data-side="${i}" aria-label="${who(i)}: faction">${fs.map(f => `<option ${f === sc.f[i] ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select></label>
+      <div class="vp-total"><span class="vp-n">${tot[i]}</span><small>VP${lead === i ? ', leading' : ''}</small></div>
+      <div class="vp-ctrl" role="group" aria-label="${who(i)}: round ${sc.r + 1} points">
+        <button class="vp-btn" data-vp="${i}:-1" aria-label="${who(i)}: remove a point from round ${sc.r + 1}" ${cur[i] ? '' : 'disabled'}>−</button>
+        <span class="vp-round"><small>Round ${sc.r + 1}</small><b>${cur[i] ? '+' + cur[i] : '0'}</b></span>
+        <button class="vp-btn" data-vp="${i}:1" aria-label="${who(i)}: add a point to round ${sc.r + 1}">+</button>
       </div>
-      <div class="vp-tot"><b>${tot(i)}</b> total VP</div>
-    </div>`;
+    </section>`;
+  const cell = (r, i) => `<td class="${r[i] > r[1 - i] ? 'won' : ''}">${r[i]}</td>`;
   $('#listPane').innerHTML = `<div class="score">
+    <div class="vp-sides">${side(0)}${side(1)}</div>
+    <p class="vp-status" role="status">${lead < 0 ? (tot[0] ? `Level at ${tot[0]} VP each` : 'No points scored yet') : `<b data-f="${esc(sc.f[lead])}">${esc(name(lead))}</b> ${name(lead) === 'You' ? 'lead' : 'leads'} by ${gap} VP`}</p>
     <div class="round-bar">
       <button class="btn" data-round="-1" ${sc.r ? '' : 'disabled'} aria-label="Previous round">‹</button>
-      <span>Round <b>${sc.r + 1}</b></span>
-      <button class="btn ${last ? 'primary' : ''}" data-round="1">${last ? 'Next round +' : '›'}</button>
+      <span class="round-name">Round <b>${sc.r + 1}</b>${sc.vp.length > 1 ? `<small> of ${sc.vp.length}</small>` : ''}</span>
+      ${last ? `<button class="btn primary" data-round="1">Start round ${sc.r + 2}</button>`
+             : `<button class="btn" data-round="1" aria-label="Next round">›</button>`}
     </div>
-    <div class="vp-sides">${side(0)}${side(1)}</div>
-    <table class="vp-table">
-      <thead><tr><th>Round</th><th data-f="${esc(sc.f[0])}">${esc(sc.f[0])}</th><th data-f="${esc(sc.f[1])}">${esc(sc.f[1])}</th></tr></thead>
-      <tbody>${sc.vp.map((r, i) => `<tr data-goround="${i}" class="${i === sc.r ? 'sel' : ''}"><td>${i + 1}</td><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td>Total</td><td>${tot(0)}</td><td>${tot(1)}</td></tr></tfoot>
-    </table>
-    <div class="score-actions"><button class="btn" data-resetscore>Reset scores</button></div>
+    ${sc.vp.length > 1 ? `<table class="vp-table">
+      <caption>Points by round. Tap a round to edit it.</caption>
+      <thead><tr><th scope="col">Round</th><th scope="col" data-f="${esc(sc.f[0])}">${esc(name(0))}</th><th scope="col" data-f="${esc(sc.f[1])}">${esc(name(1))}</th></tr></thead>
+      <tbody>${sc.vp.map((r, i) => `<tr data-goround="${i}" tabindex="0" ${i === sc.r ? 'class="sel" aria-current="true"' : ''}><th scope="row">${i + 1}</th>${cell(r, 0)}${cell(r, 1)}</tr>`).join('')}</tbody>
+      <tfoot><tr><th scope="row">Total</th>${cell(tot, 0)}${cell(tot, 1)}</tr></tfoot>
+    </table>` : `<p class="vp-hint">Score each round with <b>+</b> and <b>−</b>, then start the next round. Totals add up automatically.</p>`}
+    <div class="score-actions"><button class="btn" data-resetscore>New game</button></div>
   </div>`;
 }
 
@@ -305,20 +361,21 @@ function cardHTML(u) {
   const pos = S.visible.indexOf(u.id);
   const selS = entry ? entry.s : basicIdx(u);
   const cvRules = new Set(u.commandVariantRules.map(baseName));
+  const prev = pos > 0, next = pos > -1 && pos < S.visible.length - 1;
+  const addBtns = `<button class="btn primary" data-add="${u.id}">${n ? `Add another <span class="n">(${n} in force)</span>` : 'Add to my force'}</button>
+        ${n ? `<button class="btn" data-removeone="${u.id}">Remove one</button>` : ''}`;
   return `
   <div class="sheet-bar">
     <button class="sheet-close" data-close aria-label="Close unit card"><span aria-hidden="true">✕</span> Close</button>
-    <span class="sheet-nav">${pos > 0 ? `<button data-step="-1" aria-label="Previous unit">‹ Prev</button>` : ''}${pos > -1 && pos < S.visible.length - 1 ? `<button data-step="1" aria-label="Next unit">Next ›</button>` : ''}</span>
+    ${pos > -1 && S.visible.length > 1 ? `<span class="sheet-pos">${pos + 1} of ${S.visible.length}</span>` : ''}
+    <span class="sheet-nav">${prev ? `<button data-step="-1" aria-label="Previous unit">‹ Prev</button>` : ''}${next ? `<button data-step="1" aria-label="Next unit">Next ›</button>` : ''}</span>
   </div>
   <article class="card" data-f="${u.faction}">
     <div class="card-head">
       <div class="card-kicker"><span class="fac">The ${u.faction}</span>, ${esc(u.categories.join(' / '))}</div>
       <h2>${esc(u.name)}</h2>
       <div class="size" title="Size">${esc(u.size)}<small>size</small></div>
-      <div class="card-actions">
-        <button class="btn primary" data-add="${u.id}">${n ? `Add another (${n} in force)` : 'Add to my force'}</button>
-        ${n ? `<button class="btn" data-removeone="${u.id}">Remove one</button>` : ''}
-      </div>
+      <div class="card-actions">${addBtns}</div>
     </div>
     ${u.img ? `<div class="card-photo"><img src="${u.img}" alt="${esc(u.name)} miniatures"></div>` : ''}
     <div class="gauges">${u.attributes.map(a => `<div class="gauge"><span class="v">${esc(a.value)}</span><span class="l">${esc(a.label)}</span></div>`).join('')}</div>
@@ -352,8 +409,14 @@ function cardHTML(u) {
           <div class="rule-body">${r.blocks.map(b => b.type === 'p' ? `<p>${hl(b.text)}</p>` : `<table class="rtable">${b.rows.map(row => `<tr><td>${esc(row[0])}</td><td>${hl(row[1])}</td></tr>`).join('')}</table>`).join('')}</div></details>`;
       }).join('')}
     </div>` : `<div class="sec"><h3>Special rules</h3><p class="row-sub">None.</p></div>`}
-    <div class="src">ORBAT ${esc(u.orbat)}, page ${u.page}.</div>
-  </article>`;
+    <div class="src">ORBAT ${esc(u.orbat)}, page ${u.page}.${S.visible.length > 1 ? ' <span class="swipe-hint">Swipe sideways for the next unit.</span>' : ''}</div>
+  </article>
+  <div class="sheet-foot">
+    <button class="btn step" data-step="-1" aria-label="Previous unit" ${prev ? '' : 'disabled'}>‹</button>
+    <button class="btn primary" data-add="${u.id}" aria-label="${n ? `Add another, ${n} in force` : 'Add to my force'}">${n ? `Add another <span class="n">(${n})</span>` : 'Add to my force'}</button>
+    ${n ? `<button class="btn" data-removeone="${u.id}" aria-label="Remove one from my force">Remove</button>` : ''}
+    <button class="btn step" data-step="1" aria-label="Next unit" ${next ? '' : 'disabled'}>›</button>
+  </div>`;
 }
 
 function renderDetail() {
@@ -367,8 +430,10 @@ function renderDetail() {
 function render() {
   document.body.classList.toggle('wide', S.tab === 'rules' || S.tab === 'score');
   renderHeader();
-  ({units: renderUnits, force: renderForce, rules: renderRules, score: renderScore})[S.tab]();
+  document.body.classList.toggle('scoring', S.tab === 'score');
+  ({units: renderUnits, force: renderForce, rules: renderRules, score: renderScore}[S.tab] || renderUnits)();
   renderDetail();
+  wakeLock();
 }
 
 /* ---------- popover ---------- */
@@ -398,6 +463,20 @@ function closeSheet() {
   if (history.state?.sheet) return history.back();   // popstate does the closing
   S.sel = null; S.selEntry = null; render();
 }
+// Swipe sideways on the card sheet to step through the list. Ignore swipes that start in the
+// sideways-scrolling armament table, and anything more vertical than horizontal.
+let swipe = null;
+$('#detail').addEventListener('touchstart', e => {
+  swipe = e.touches.length === 1 && narrow() && !e.target.closest('.arm-wrap') ? {x: e.touches[0].clientX, y: e.touches[0].clientY} : null;
+}, {passive: true});
+$('#detail').addEventListener('touchend', e => {
+  if (!swipe) return;
+  const dx = e.changedTouches[0].clientX - swipe.x, dy = e.changedTouches[0].clientY - swipe.y;
+  swipe = null;
+  if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+  const i = S.visible.indexOf(S.sel) + (dx < 0 ? 1 : -1);
+  if (S.visible[i]) { openUnit(S.visible[i]); $('#detail .card')?.classList.add(dx < 0 ? 'in-r' : 'in-l'); }
+}, {passive: true});
 window.addEventListener('popstate', () => { if (S.sel) { S.sel = null; S.selEntry = null; render(); } });
 
 document.addEventListener('click', e => {
@@ -405,28 +484,28 @@ document.addEventListener('click', e => {
   if (!t) { if (!e.target.closest('#pop')) closePop(); return; }
   const ds = t.dataset;
   if (!t.closest('#pop') && !('q' in ds)) closePop();
-  if (ds.faction) { S.faction = ds.faction; store.set('faction', S.faction); S.cats.clear(); render(); return; }
+  if (ds.faction) { S.faction = ds.faction; store.set('faction', S.faction); S.cats.clear(); render(); toTop(); return; }
   if (ds.tab) { S.tab = ds.tab; render(); window.scrollTo(0, 0); return; }
   if (ds.tabGo) { S.tab = ds.tabGo; render(); return; }
-  if (ds.cat) { S.cats.has(ds.cat) ? S.cats.delete(ds.cat) : S.cats.add(ds.cat); render(); return; }
-  if (ds.gkind) { S.gkind = ds.gkind; render(); return; }
+  if (ds.cat) { S.cats.has(ds.cat) ? S.cats.delete(ds.cat) : S.cats.add(ds.cat); render(); toTop(); return; }
+  if (ds.gkind) { S.gkind = ds.gkind; render(); toTop(); return; }
+  if ('glossall' in ds) { S.glossOpen = !S.glossOpen; render(); return; }
   if ('clear' in ds) { S.cats.clear(); S.q = ''; $('#q').value = ''; render(); return; }
   if (ds.add) { e.stopPropagation(); addToForce(ds.add); return; }
   if (ds.removeone) { removeOne(ds.removeone); return; }
-  if (ds.remove) { S.force = S.force.filter(x => x.k !== ds.remove); saveForce(); render(); return; }
+  if (ds.remove) { const u = S.byId[S.force.find(x => x.k === ds.remove)?.u]; undoable(`${u?.name || 'Unit'} removed`, () => { S.force = S.force.filter(x => x.k !== ds.remove); saveForce(); }); return; }
   if (ds.str) { const [k, i] = ds.str.split(':'); const en = S.force.find(x => x.k === k); en.s = +i; saveForce(); render(); return; }
   if (ds.var) { const [k, i] = ds.var.split(':'); const en = S.force.find(x => x.k === k); en.v = +i; saveForce(); render(); return; }
   if ('share' in ds) { shareForce(); return; }
-  if (ds.vp) { const [i, d] = ds.vp.split(':').map(Number); const r = S.score.vp[S.score.r]; r[i] = Math.max(0, r[i] + d); saveScore(); render(); return; }
-  if (ds.round) {
-    const sc = S.score, r = sc.r + (+ds.round);
-    if (r < 0) return;
-    if (r === sc.vp.length) sc.vp.push([0, 0]);
-    sc.r = r; saveScore(); render(); return;
+  if (ds.vp) {
+    const [i, d] = ds.vp.split(':').map(Number), r = S.score.vp[S.score.r];
+    r[i] = Math.max(0, r[i] + d); navigator.vibrate?.(8); saveScore(); render(); return;
   }
-  if (ds.goround) { S.score.r = +ds.goround; saveScore(); render(); return; }
-  if ('resetscore' in ds) { if (confirm('Reset all victory points and start again from round 1?')) { S.score = {...newScore(), f: S.score.f}; saveScore(); render(); } return; }
-  if ('clearforce' in ds) { if (confirm('Remove every unit from your force?')) { S.force = []; saveForce(); render(); } return; }
+  if (ds.round) { goRound(S.score.r + (+ds.round)); return; }
+  if (ds.goround) { goRound(+ds.goround); return; }
+  if ('resetscore' in ds) { undoable('Scores cleared for a new game', () => { S.score = {...newScore(), f: S.score.f}; saveScore(); }); return; }
+  if ('clearforce' in ds) { undoable(`Force cleared (${S.force.length} units)`, () => { S.force = []; saveForce(); }); return; }
+  if ('undo' in ds) { const u = toast.undo; $('#toast').hidden = true; toast.undo = null; u?.(); return; }
   if (ds.q) { showGloss(ds.q); return; }
   if (ds.trait) { S.q = ds.trait; $('#q').value = ds.trait; S.tab = S.tab === 'force' ? 'force' : 'units'; S.sel = null; if (history.state?.sheet) history.back(); render(); toast(`Showing units with ${ds.trait}`); return; }
   if (ds.step) { e.stopPropagation(); const i = S.visible.indexOf(S.sel) + (+ds.step); if (S.visible[i]) openUnit(S.visible[i]); return; }
@@ -442,7 +521,7 @@ document.addEventListener('keydown', e => {
     if (document.activeElement === $('#q') && S.q) { S.q = ''; $('#q').value = ''; return render(); }
     if (S.sel) return closeSheet();
   }
-  if (e.key === 'Enter' && (e.target.classList.contains('row') || e.target.dataset.open)) e.target.click();
+  if (e.key === 'Enter' && (e.target.classList.contains('row') || e.target.dataset.open || e.target.dataset.goround)) e.target.click();
   if (S.sel && document.activeElement?.tagName !== 'INPUT' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
     const i = S.visible.indexOf(S.sel) + (e.key === 'ArrowRight' ? 1 : -1);
     if (S.visible[i]) openUnit(S.visible[i]);
@@ -458,7 +537,22 @@ $('#q').addEventListener('input', e => {
   qt = setTimeout(() => { S.q = e.target.value.trim(); if (S.tab === 'score') S.tab = 'units'; render(); }, 90);
 });
 window.addEventListener('hashchange', () => { importFromHash(); render(); });
-window.addEventListener('resize', measureHeader);
+window.addEventListener('resize', () => { measureHeader(); fades(); });
+document.querySelectorAll('.faction-switch, .filters').forEach(el => el.addEventListener('scroll', fades, {passive: true}));
+// Search button on a phone keyboard: hide the keyboard so the results are visible.
+$('#q').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+
+// Keep the screen awake while keeping score, so it doesn't dim mid-game.
+let wake = null;   // a promise for the current lock, so overlapping renders don't ask twice
+function wakeLock() {
+  const want = S.tab === 'score' && document.visibilityState === 'visible';
+  if (want && !wake && navigator.wakeLock) {
+    const p = wake = navigator.wakeLock.request('screen')
+      .then(l => { l.addEventListener('release', () => { if (wake === p) wake = null; }); return l; })
+      .catch(() => { if (wake === p) wake = null; });
+  } else if (!want && wake) { wake.then(l => l?.release()); wake = null; }
+}
+document.addEventListener('visibilitychange', wakeLock);
 
 /* ---------- boot ---------- */
 Promise.all([fetch('data/units.json').then(r => r.json()), fetch('data/glossary.json').then(r => r.json())])

@@ -1,7 +1,7 @@
 // Offline cache: app shell + data + images. Bump VERSION after updating data.
-const VERSION = 'acc-v4';
+const VERSION = 'acc-v6';
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(['./', 'index.html', 'styles.css', 'app.js', 'data/units.json', 'data/glossary.json', 'icon.svg', 'manifest.webmanifest'])));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(['./', 'index.html', 'styles.css?v=6', 'app.js?v=6', 'data/units.json', 'data/glossary.json', 'icon.svg', 'icon-180.png', 'manifest.webmanifest'])));
   self.skipWaiting();
 });
 self.addEventListener('activate', e => {
@@ -9,9 +9,11 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 // Network first (so updates show up), fall back to cache when offline.
+// Our own files revalidate with the server, so a fresh page never gets a stale script from the HTTP cache.
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
-  e.respondWith(fetch(e.request).then(r => {
+  const own = new URL(e.request.url).origin === location.origin && e.request.mode !== 'navigate';
+  e.respondWith(fetch(own ? new Request(e.request, {cache: 'no-cache'}) : e.request).then(r => {
     const copy = r.clone();
     if (r.ok) caches.open(VERSION).then(c => c.put(e.request, copy));
     return r;
