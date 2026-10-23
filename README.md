@@ -2,7 +2,20 @@
 
 Web Page: https://jayfitzhenry.github.io/armoured-clash-interactive-cards/
 
-A static, offline-capable web app for looking up Armoured Clash unit cards (The Crown ORBAT v1.05, The Empire ORBAT v1.05 Beta) and the Glossary of Rules & Qualities v1.11.
+A static, offline-capable web app for looking up Armoured Clash unit cards and the Glossary of Rules & Qualities v1.11. It covers 193 units from these ORBATs:
+
+| Faction | ORBAT version |
+| --- | --- |
+| Alliance | v1.01 |
+| Commonwealth | v1.02 |
+| Crown | v1.05 |
+| Empire | v1.05 Beta |
+| Enlightened | v1.05 |
+| Imperium | v1.03 |
+| Sultanate | v1.02 |
+| Union | v1.05 |
+
+Unit photos are full-colour transparent WebP cut-outs in `img/`, named by unit id (for example `img/crown-rifle-platoon.webp`).
 
 - **All units**: filter by faction and category, search names, traits, special rules, weapon qualities and rule text. Tap a unit for its full card.
 - **My force**: tap **+** to add units. Set strength (Basic/Reinforced/Full) and command variant per unit; points and VPR total automatically. Saved on the device; **Share** gives a link that loads the same force.

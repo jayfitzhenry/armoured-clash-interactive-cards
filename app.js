@@ -8,7 +8,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('acc.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('acc.' + k, JSON.stringify(v)); } catch {} }
 };
-const CATS = ['Command','Infantry','Cavalry','Field Gun','Armour','Artillery','Fortification','Aircraft'];
+const CATS = ['Command','Infantry','Fireteam','Cavalry','Field Gun','Armour','Carriage','Walker','Artillery','Fortification','Rotorcraft','Aircraft'];
 const STRENGTH_SHORT = {Basic:'Basic', Reinforced:'Reinf.', Full:'Full'};
 
 const S = {
@@ -129,6 +129,12 @@ function importFromHash() {
 }
 
 /* ---------- rendering: header bits ---------- */
+function renderFactions() {
+  const fs = [...new Set(S.units.map(u => u.faction))].sort();
+  if (S.faction !== 'All' && !fs.includes(S.faction)) S.faction = 'All';
+  $('#factions').innerHTML = [['All', 'All factions'], ...fs.map(f => [f, f])]
+    .map(([f, l]) => `<button data-faction="${esc(f)}" ${f !== 'All' ? `data-f="${esc(f)}"` : ''} aria-pressed="false">${f !== 'All' ? '<i></i>' : ''}${esc(l)}</button>`).join('');
+}
 function renderHeader() {
   document.querySelectorAll('.faction-switch button').forEach(b => b.setAttribute('aria-pressed', b.dataset.faction === S.faction));
   document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === S.tab));
@@ -199,7 +205,7 @@ function renderForce() {
       <div><span class="big">${vpr}</span><small>total VPR</small></div>
       <div class="actions"><button class="btn" data-share>Share</button><button class="btn" data-clearforce>Clear</button></div>
     </div>
-    ${factions.length > 1 ? `<div class="meta-line"><span>Mixed factions: ${factions.join(' and ')}</span></div>` : ''}
+    ${factions.length > 1 ? `<div class="meta-line"><span>Mixed factions: ${factions.join(', ')}</span></div>` : ''}
     ${entries.length < S.force.length ? `<div class="meta-line"><span>Showing ${entries.length} of ${S.force.length} (filters on)</span></div>` : ''}
     <ul class="rows">${entries.map(e => {
       const u = S.byId[e.u];
@@ -210,7 +216,7 @@ function renderForce() {
           <button class="icon-btn" data-remove="${e.k}" aria-label="Remove ${esc(u.name)}" title="Remove">×</button>
         </div>
         <div class="entry-ctrls">
-          ${u.strengths.length > 1 ? `<span class="seg" role="group" aria-label="Strength">${u.strengths.map((s, i) => `<button data-str="${e.k}:${i}" aria-pressed="${e.s === i}">${STRENGTH_SHORT[s]}</button>`).join('')}</span>` : `<span class="row-sub">Full strength only</span>`}
+          ${u.strengths.length > 1 ? `<span class="seg" role="group" aria-label="Strength">${u.strengths.map((s, i) => `<button data-str="${e.k}:${i}" aria-pressed="${e.s === i}">${STRENGTH_SHORT[s]}</button>`).join('')}</span>` : `<span class="row-sub">${u.strengths[0] === 'Full' ? 'Full strength' : u.strengths[0]} only</span>`}
           ${u.variants.length > 1 ? `<span class="seg" role="group" aria-label="Variant">${u.variants.map((v, i) => `<button data-var="${e.k}:${i}" aria-pressed="${e.v === i}">${i ? 'Command' : 'Standard'}</button>`).join('')}</span>` : ''}
           <span class="row-sub">${u.models[e.s]} model${u.models[e.s] === '1' ? '' : 's'}, VPR ${entryVpr(e)}</span>
         </div>
@@ -275,7 +281,8 @@ function cardHTML(u) {
 
     <div class="sec">
       <h3>Armament</h3>
-      <div class="arm-wrap"><table class="arm">
+      ${!u.armament.length ? '<p class="arm-none">No armament.</p>' : ''}
+      <div class="arm-wrap" ${!u.armament.length ? 'hidden' : ''}><table class="arm">
         <thead><tr><th>Attack</th><th>Range</th>${u.brackets.map(b => `<th>${esc(u.bracketType)}<br>${esc(b)}</th>`).join('')}<th class="qcol">Qualities</th></tr></thead>
         <tbody>${u.armament.map(a => `<tr class="${a.qualities.length ? 'has-q' : ''}"><td class="w">${esc(a.name)}</td><td class="r">${esc(a.range)}</td>${a.dice.map(d => `<td class="d">${esc(d).replace(/\((\d+)\)/, '<small>($1)</small>')}</td>`).join('')}<td class="q qcol">${a.qualities.map(qTag).join('')}</td></tr>${a.qualities.length ? `<tr class="qrow"><td class="q" colspan="${a.dice.length + 2}">${a.qualities.map(qTag).join('')}</td></tr>` : ''}`).join('')}</tbody>
       </table></div>
@@ -403,6 +410,7 @@ Promise.all([fetch('data/units.json').then(r => r.json()), fetch('data/glossary.
     S.units = units; S.gloss = gloss;
     units.forEach(u => { S.byId[u.id] = u; buildIndex(u); });
     S.force = S.force.filter(e => S.byId[e.u]);
+    renderFactions();
     importFromHash();
     render();
   })
